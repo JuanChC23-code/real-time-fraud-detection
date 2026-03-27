@@ -1,41 +1,110 @@
-from confluent_kafka import Consumer, Producer
+import os
 import json
-import joblib
-import time
-import uuid
+import csv
+import requests
+from datetime import datetime
+from confluent_kafka import Consumer, Producer
+from dotenv import load_dotenv
 
-MODEL_VERSION = "xgboost_v1"
-INPUT_TOPIC = "fraud.transactions.v1"
-OUTPUT_TOPIC = "fraud.predictions.v1"
-THRESHOLD = 0.8
+load_dotenv()
 
-print("Loading model and schema...")
+KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP")
+KAFKA_API_KEY = os.getenv("KAFKA_API_KEY")
+KAFKA_API_SECRET = os.getenv("KAFKA_API_SECRET")
+TRANSACTIONS_TOPIC = os.getenv("TRANSACTIONS_TOPIC", "fraud.transactions.v1")
+PREDICTIONS_TOPIC = os.getenv("PREDICTIONS_TOPIC", "fraud.predictions.v1")
+KAFKA_GROUP = os.getenv("KAFKA_GROUP", "fraud-consumer-group")
 
-model = joblib.load("model_registry/xgboost_v1.pkl")
-with open("model_registry/feature_cols_v1.json", "r") as f:
-    feature_cols = json.load(f)
+API_URL = "https://real-time-fraud-detection-1-25q3.onrender.com/predict"
+
+SNAPSHOT_DIR = "data/snapshots"
+os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+
+today_str = datetime.utcnow().strftime("%Y%m%d")
+transactions_snapshot = os.path.join(SNAPSHOT_DIR, f"transactions_{today_str}.csv")
+predictions_snapshot = os.path.join(SNAPSHOT_DIR, f"predictions_{today_str}.csv")
 
 consumer = Consumer({
-    "bootstrap.servers": "localhost:9092",
-    "group.id": "fraud-predictor-v1",
-    "auto.offset.reset": "earliest",
+    "bootstrap.servers": KAFKA_BOOTSTRAP,
+    "security.protocol": "SASL_SSL",
+    "sasl.mechanisms": "PLAIN",
+    "sasl.username": KAFKA_API_KEY,
+    "sasl.password": KAFKA_API_SECRET,
+    "group.id": KAFKA_GROUP,
+    "auto.offset.reset": "earliest"
 })
 
 producer = Producer({
-    "bootstrap.servers": "localhost:9092",
+    "bootstrap.servers": KAFKA_BOOTSTRAP,
+    "security.protocol": "SASL_SSL",
+    "sasl.mechanisms": "PLAIN",
+    "sasl.username": KAFKA_API_KEY,
+    "sasl.password": KAFKA_API_SECRET
 })
 
-consumer.subscribe([INPUT_TOPIC])
+consumer.subscribe([TRANSACTIONS_TOPIC])
 
-count = 0
-alerts = 0
-start_time = time.time()
+print("Consumer running... Waiting for events.")
 
-print(f"Streaming: {INPUT_TOPIC} -> {OUTPUT_TOPIC} (Ctrl+C to stop)")
+def ensure_csv_header(file_path: str, fieldnames: list[str]) -> None:
+    """Create CSV file with header if it does not exist."""
+    if not os.path.exists(file_path):
+        with open(file_path, mode="w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+
+def append_csv_row(file_path: str, fieldnames: list[str], row: dict) -> None:
+    """Append a row to CSV, creating header if needed."""
+    ensure_csv_header(file_path, fieldnames)
+    with open(file_path, mode="a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writerow(row)
+
+def validate_event(event: dict) -> bool:
+    """Basic schema validation for incoming transaction events."""
+    required_fields = ["request_id", "timestamp", "features", "label"]
+
+    for field in required_fields:
+        if field not in event:
+            print(f"Invalid event: missing field '{field}'")
+            return False
+
+    if not isinstance(event["features"], dict):
+        print("Invalid event: 'features' must be a dictionary")
+        return False
+
+    return True
+
+def flatten_transaction_event(event: dict) -> dict:
+    """Flatten transaction event for CSV storage."""
+    flattened = {
+        "request_id": event.get("request_id"),
+        "timestamp": event.get("timestamp"),
+        "label": event.get("label")
+    }
+
+    features = event.get("features", {})
+    for key, value in features.items():
+        flattened[key] = value
+
+    return flattened
+
+def flatten_prediction_event(event: dict) -> dict:
+    """Flatten prediction event for CSV storage."""
+    return {
+        "request_id": event.get("request_id"),
+        "timestamp": event.get("timestamp"),
+        "model_version": event.get("model_version"),
+        "fraud_probability": event.get("fraud_probability"),
+        "prediction": event.get("prediction"),
+        "label": event.get("label")
+    }
 
 def delivery_report(err, msg):
-    if err:
-        print("Delivery failed:", err)
+    if err is not None:
+        print(f"Prediction delivery failed: {err}")
+    else:
+        print(f"Prediction sent to {msg.topic()} [{msg.partition()}]")
 
 try:
     while True:
@@ -43,54 +112,62 @@ try:
 
         if msg is None:
             continue
+
         if msg.error():
-            print("Consumer error:", msg.error())
+            print(f"Consumer error: {msg.error()}")
             continue
 
-        data = json.loads(msg.value().decode())
+        event = json.loads(msg.value().decode("utf-8"))
 
-        # Vector en orden correcto
-        features = [data[col] for col in feature_cols]
-        prob = float(model.predict_proba([features])[0][1])
+        if not validate_event(event):
+            continue
 
-        request_id = str(uuid.uuid4())
-        ts = time.time()
+        # Save raw transaction snapshot
+        transaction_row = flatten_transaction_event(event)
+        transaction_fields = list(transaction_row.keys())
+        append_csv_row(transactions_snapshot, transaction_fields, transaction_row)
 
-        out_event = {
-            "request_id": request_id,
-            "timestamp": ts,
-            "model_version": MODEL_VERSION,
-            "input_topic": INPUT_TOPIC,
-            "output_topic": OUTPUT_TOPIC,
-            "fraud_probability": prob,
-            "is_alert": prob > THRESHOLD,
-        }
+        request_id = event.get("request_id")
+        features = event.get("features", {})
+        label = event.get("label")
 
-        # (Opcional) incluir campos útiles para auditoría
-        if "Time" in data:
-            out_event["Time"] = data["Time"]
-        if "Amount" in data:
-            out_event["Amount"] = data["Amount"]
+        try:
+            response = requests.post(API_URL, json=features, timeout=30)
+            response.raise_for_status()
+            prediction = response.json()
 
-        producer.produce(
-            OUTPUT_TOPIC,
-            key=request_id,
-            value=json.dumps(out_event),
-            callback=delivery_report
-        )
-        producer.poll(0)
+            result_event = {
+                "request_id": request_id,
+                "timestamp": prediction.get("timestamp"),
+                "model_version": prediction.get("model_version"),
+                "fraud_probability": prediction.get("fraud_probability"),
+                "prediction": prediction.get("prediction"),
+                "label": label
+            }
 
-        count += 1
-        if prob > THRESHOLD:
-            alerts += 1
+            # Save prediction snapshot
+            prediction_row = flatten_prediction_event(result_event)
+            prediction_fields = list(prediction_row.keys())
+            append_csv_row(predictions_snapshot, prediction_fields, prediction_row)
 
-        if count % 200 == 0:
-            elapsed = time.time() - start_time
-            rate = count / elapsed if elapsed > 0 else 0
-            print(f"[STATS] processed={count} alerts={alerts} rate={rate:.1f} msg/s")
+            # Publish prediction back to Kafka
+            producer.produce(
+                PREDICTIONS_TOPIC,
+                key=str(request_id),
+                value=json.dumps(result_event),
+                callback=delivery_report
+            )
+            producer.poll(0)
+
+            print(f"Processed request_id={request_id}")
+            print(f"Saved transaction snapshot -> {transactions_snapshot}")
+            print(f"Saved prediction snapshot -> {predictions_snapshot}")
+
+        except Exception as e:
+            print(f"API error for request_id={request_id}: {e}")
 
 except KeyboardInterrupt:
-    print("\nStopping...")
+    print("Stopping consumer...")
 
 finally:
     consumer.close()

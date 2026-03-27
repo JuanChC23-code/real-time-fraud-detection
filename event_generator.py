@@ -1,40 +1,53 @@
-from confluent_kafka import Producer
-import pandas as pd
+import os
 import json
 import time
+import uuid
+import pandas as pd
+from confluent_kafka import Producer
+from dotenv import load_dotenv
 
-print("Loading dataset for streaming...")
+load_dotenv()
 
-# Cargar dataset
+KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP")
+KAFKA_API_KEY = os.getenv("KAFKA_API_KEY")
+KAFKA_API_SECRET = os.getenv("KAFKA_API_SECRET")
+TRANSACTIONS_TOPIC = os.getenv("TRANSACTIONS_TOPIC", "fraud.transactions.v1")
+
+producer = Producer({
+    "bootstrap.servers": KAFKA_BOOTSTRAP,
+    "security.protocol": "SASL_SSL",
+    "sasl.mechanisms": "PLAIN",
+    "sasl.username": KAFKA_API_KEY,
+    "sasl.password": KAFKA_API_SECRET
+})
+
 df = pd.read_csv("data/creditcard.csv")
 
-# Cargar esquema de columnas
-with open("model_registry/feature_cols_v1.json", "r") as f:
-    feature_cols = json.load(f)
+feature_cols = [col for col in df.columns if col != "Class"]
 
-producer = Producer({'bootstrap.servers': 'localhost:9092'})
+def delivery_report(err, msg):
+    if err is not None:
+        print(f"Delivery failed: {err}")
+    else:
+        print(f"Sent to {msg.topic()} [{msg.partition()}]")
 
-topic = "fraud.transactions.v1"
-
-print("Starting real data stream...")
-
-for idx, row in df.iterrows():
-
-    event = row[feature_cols].to_dict()
+for _, row in df.head(20).iterrows():
+    event = {
+        "request_id": str(uuid.uuid4()),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "features": {col: float(row[col]) for col in feature_cols if col != "Time"},
+        "label": int(row["Class"])
+    }
 
     producer.produce(
-        topic,
-        key=str(idx),
-        value=json.dumps(event)
+        TRANSACTIONS_TOPIC,
+        key=event["request_id"],
+        value=json.dumps(event),
+        callback=delivery_report
     )
 
     producer.poll(0)
-
-    if idx % 1000 == 0:
-        print(f"Sent {idx} events...")
-
-    time.sleep(0.01)  # Simula streaming real
+    time.sleep(0.5)
 
 producer.flush()
-
-print("Streaming completed.")
+print("Finished sending events.")
