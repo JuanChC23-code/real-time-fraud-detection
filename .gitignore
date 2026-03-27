@@ -8,8 +8,13 @@ __pycache__/
 venv/
 .env
 
-# Model artifacts
+# Ignore pickles by default
 *.pkl
+
+# But keep required project models
+!model_registry/
+!model_registry/*.pkl
+!model_registry/*.json
 
 # Data
 data/*.csv
