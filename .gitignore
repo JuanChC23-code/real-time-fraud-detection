@@ -4,18 +4,26 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Virtual Environment
+# Virtual environment
 venv/
-.env/
+.env
 
-# Dataset
-data/
-*.csv
-
-# Model binaries (optional if large)
+# Model artifacts
 *.pkl
-*.joblib
 
-# OS files
+# Data
+data/*.csv
+
+# OS
 .DS_Store
 Thumbs.db
+
+# VS Code
+.vscode/
+
+# Logs
+*.log
+
+# Private files
+token.txt
+token_private.txt
