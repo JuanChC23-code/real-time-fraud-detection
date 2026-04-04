@@ -26,9 +26,47 @@ jobs:
 
       - name: Ensure required folders exist
         run: |
+          mkdir -p data
+          mkdir -p data/snapshots
           mkdir -p model_registry
           mkdir -p results
-          mkdir -p data/snapshots
+
+      - name: Create dataset if missing
+        run: |
+          python - <<'PY'
+          import os
+          import pandas as pd
+          import numpy as np
+
+          os.makedirs("data", exist_ok=True)
+
+          data_path = "data/creditcard.csv"
+
+          if not os.path.exists(data_path):
+              np.random.seed(42)
+              rows = 400
+
+              data = {
+                  "Time": np.arange(rows, dtype=float)
+              }
+
+              for i in range(1, 29):
+                  data[f"V{i}"] = np.random.normal(0, 1, rows)
+
+              data["Amount"] = np.random.uniform(1, 500, rows)
+
+              target = np.zeros(rows, dtype=int)
+              target[:40] = 1
+              np.random.shuffle(target)
+              data["Class"] = target
+
+              df = pd.DataFrame(data)
+              df.to_csv(data_path, index=False)
+
+              print(f"Created synthetic dataset at {data_path}")
+          else:
+              print(f"Dataset already exists at {data_path}")
+          PY
 
       - name: Train models
         run: |
@@ -47,15 +85,97 @@ jobs:
 
           if not os.path.exists(tx_path):
               tx_df = pd.DataFrame([
-                  {"request_id": "req-1", "timestamp": "2026-04-03T10:00:00", "label": 0, "V1": 0.1, "V2": -0.2},
-                  {"request_id": "req-2", "timestamp": "2026-04-03T10:01:00", "label": 1, "V1": 0.5, "V2": -0.8}
+                  {
+                      "request_id": "req-1",
+                      "timestamp": "2026-04-03T10:00:00",
+                      "label": 0,
+                      "Time": 1.0,
+                      "V1": 0.1,
+                      "V2": -0.2,
+                      "V3": 0.3,
+                      "V4": 0.4,
+                      "V5": -0.5,
+                      "V6": 0.6,
+                      "V7": -0.7,
+                      "V8": 0.8,
+                      "V9": -0.9,
+                      "V10": 1.0,
+                      "V11": 0.11,
+                      "V12": -0.12,
+                      "V13": 0.13,
+                      "V14": -0.14,
+                      "V15": 0.15,
+                      "V16": -0.16,
+                      "V17": 0.17,
+                      "V18": -0.18,
+                      "V19": 0.19,
+                      "V20": -0.20,
+                      "V21": 0.21,
+                      "V22": -0.22,
+                      "V23": 0.23,
+                      "V24": -0.24,
+                      "V25": 0.25,
+                      "V26": -0.26,
+                      "V27": 0.27,
+                      "V28": -0.28,
+                      "Amount": 100.0
+                  },
+                  {
+                      "request_id": "req-2",
+                      "timestamp": "2026-04-03T10:01:00",
+                      "label": 1,
+                      "Time": 2.0,
+                      "V1": 0.5,
+                      "V2": -0.8,
+                      "V3": 0.7,
+                      "V4": 0.2,
+                      "V5": -0.1,
+                      "V6": 0.9,
+                      "V7": -0.4,
+                      "V8": 0.6,
+                      "V9": -0.3,
+                      "V10": 0.2,
+                      "V11": 0.5,
+                      "V12": -0.6,
+                      "V13": 0.4,
+                      "V14": -0.9,
+                      "V15": 0.8,
+                      "V16": -0.7,
+                      "V17": 0.3,
+                      "V18": -0.2,
+                      "V19": 0.1,
+                      "V20": -0.5,
+                      "V21": 0.6,
+                      "V22": -0.4,
+                      "V23": 0.2,
+                      "V24": -0.1,
+                      "V25": 0.9,
+                      "V26": -0.8,
+                      "V27": 0.7,
+                      "V28": -0.6,
+                      "Amount": 250.0
+                  }
               ])
               tx_df.to_csv(tx_path, index=False)
 
           if not os.path.exists(pred_path):
               pred_df = pd.DataFrame([
-                  {"request_id": "req-1", "timestamp": "2026-04-03T10:00:01", "model_version": "xgboost_v1", "fraud_probability": 0.10, "prediction": 0, "label": 0},
-                  {"request_id": "req-2", "timestamp": "2026-04-03T10:01:01", "model_version": "xgboost_v1", "fraud_probability": 0.90, "prediction": 1, "label": 1}
+                  {
+                      "request_id": "req-1",
+                      "timestamp": "2026-04-03T10:00:01",
+                      "model_version": "xgboost_v1",
+                      "fraud_probability": 0.10,
+                      "prediction": 0,
+                      "label": 0
+                  },
+                  {
+                      "request_id": "req-2",
+                      "timestamp": "2026-04-03T10:01:01",
+                      "model_version": "xgboost_v1",
+                      "fraud_probability": 0.90,
+                      "prediction": 1,
+                      "label": 1
+                  }
               ])
               pred_df.to_csv(pred_path, index=False)
           PY
