@@ -1,0 +1,77 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test-and-coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ensure required folders exist
+        run: |
+          mkdir -p model_registry
+          mkdir -p results
+          mkdir -p data/snapshots
+
+      - name: Train models
+        run: |
+          python -m pipeline.train.train_models
+
+      - name: Create sample snapshot files if missing
+        run: |
+          python - <<'PY'
+          import os
+          import pandas as pd
+
+          os.makedirs("data/snapshots", exist_ok=True)
+
+          tx_path = "data/snapshots/transactions_ci.csv"
+          pred_path = "data/snapshots/predictions_ci.csv"
+
+          if not os.path.exists(tx_path):
+              tx_df = pd.DataFrame([
+                  {"request_id": "req-1", "timestamp": "2026-04-03T10:00:00", "label": 0, "V1": 0.1, "V2": -0.2},
+                  {"request_id": "req-2", "timestamp": "2026-04-03T10:01:00", "label": 1, "V1": 0.5, "V2": -0.8}
+              ])
+              tx_df.to_csv(tx_path, index=False)
+
+          if not os.path.exists(pred_path):
+              pred_df = pd.DataFrame([
+                  {"request_id": "req-1", "timestamp": "2026-04-03T10:00:01", "model_version": "xgboost_v1", "fraud_probability": 0.10, "prediction": 0, "label": 0},
+                  {"request_id": "req-2", "timestamp": "2026-04-03T10:01:01", "model_version": "xgboost_v1", "fraud_probability": 0.90, "prediction": 1, "label": 1}
+              ])
+              pred_df.to_csv(pred_path, index=False)
+          PY
+
+      - name: Run tests with coverage
+        run: |
+          pytest --cov=pipeline --cov-report=term-missing
+
+      - name: Run model comparison
+        run: |
+          python -m pipeline.eval.compare_models
+
+      - name: Run online KPI
+        run: |
+          python -m pipeline.eval.online_kpi
+
+      - name: Run drift check
+        run: |
+          python -m pipeline.eval.drift_check
