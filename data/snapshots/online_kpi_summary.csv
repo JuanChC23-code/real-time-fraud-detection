@@ -1,2 +1,0 @@
-transactions_file,predictions_file,total_predictions,predicted_fraud_rate,true_fraud_rate,online_accuracy
-data\snapshots\transactions_20260404.csv,data\snapshots\predictions_20260404.csv,79,0.0,0.0,1.0

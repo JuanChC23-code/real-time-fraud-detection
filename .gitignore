@@ -1,34 +1,48 @@
+# ==============================
 # Python
+# ==============================
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 
-# Virtual environment
+# ==============================
+# Virtual Environment
+# ==============================
 venv/
 .env
 
-# Ignore pickles by default
-*.pkl
-
-# But keep required project models
-!model_registry/
-!model_registry/*.pkl
-!model_registry/*.json
-
-# Data
+# ==============================
+# Data (NO subir snapshots)
+# ==============================
+data/snapshots/
 data/*.csv
 
-# OS
+# ==============================
+# Models (NO subir modelos grandes)
+# ==============================
+model_registry/*.pkl
+model_registry/*_metadata.json
+model_registry/active_model.json
+
+# ==============================
+# Logs
+# ==============================
+*.log
+
+# ==============================
+# OS Files
+# ==============================
 .DS_Store
 Thumbs.db
 
+# ==============================
 # VS Code
+# ==============================
 .vscode/
 
-# Logs
-*.log
-
-# Private files
+# ==============================
+# Private / Secrets
+# ==============================
 token.txt
 token_private.txt
