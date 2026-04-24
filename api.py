@@ -27,32 +27,54 @@ def health():
 
 @app.post("/predict")
 def predict(transaction: dict):
+    global active_model, active_info
+
     try:
-        # Convert input to dataframe
+        #  SECURITY VALIDATION
+        from pipeline.security.input_validation import validate_input
+        validate_input(transaction)
+
+        request_id = str(uuid.uuid4())
+
         df = pd.DataFrame([transaction])
 
-        # Ensure all required features exist
         for col in feature_cols:
             if col not in df.columns:
                 df[col] = 0
 
-        # Keep correct order
         df = df[feature_cols]
 
-        # Predict probability
-        prob = model.predict_proba(df)[0][1]
+        bucket = assign_ab_bucket(request_id)
 
-        prediction = int(prob > 0.5)
+        model_used = active_model
+        model_name_used = active_info["active_model_name"]
+        model_version_used = active_info["active_model_version"]
 
-        response = {
-            "request_id": str(uuid.uuid4()),
-            "timestamp": datetime.utcnow().isoformat(),
+        prob = model_used.predict_proba(df)[0][1]
+        prediction = int(prob >= PREDICTION_THRESHOLD)
+
+        timestamp = datetime.utcnow().isoformat()
+
+        result = {
+            "request_id": request_id,
+            "timestamp": timestamp,
             "prediction": prediction,
             "fraud_probability": float(prob),
-            "model_version": "xgboost_v1"
+            "model_name": model_name_used,
+            "model_version": model_version_used,
+            "ab_bucket": bucket
         }
 
-        return response
+        log_prediction(result)
+
+        trace = build_prediction_trace(
+            request_id=request_id,
+            data_snapshot_id="live_stream"
+        )
+
+        save_prediction_trace(trace)
+
+        return result
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
